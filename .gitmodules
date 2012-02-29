@@ -1,0 +1,9 @@
+[submodule "deps/libuv"]
+	path = deps/libuv
+	url = git://github.com/joyent/libuv.git
+[submodule "deps/http-parser"]
+	path = deps/http-parser
+	url = git://github.com/joyent/http-parser.git
+[submodule "deps/luajit"]
+	path = deps/luajit
+	url = http://luajit.org/git/luajit-2.0.git
