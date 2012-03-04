@@ -10,6 +10,7 @@
 #include <errno.h>
 #endif
 
+#include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
 
@@ -20,25 +21,148 @@
   lua_pushnumber(L, val); \
   lua_settable(L, -3);
 
-#define LUA_USERDATA_SERVICES "luarest.service"
+#define LUA_USERDATA_APPLICATION "luarest.application"
 
 /* forward decls */
-static int l_service_register(lua_State* state);
+static int l_register(lua_State* state);
 
-static const struct luaL_Reg l_service [] = {
-	{"register", l_service_register},
+static const struct luaL_Reg l_application [] = {
+	{"register", l_register},
 	{NULL, NULL} /* sentinel */
 };
 
 /**
- * LUA syntax: service.register(method, url, callback)
+ * DEBUG function
+ *
+ */
+static void stackDump(lua_State *L)
+{
+    int i;
+    int top = lua_gettop(L);
+    for (i = 1; i <= top; i++) {
+        int t = lua_type(L, i);
+        switch(t) {
+            case LUA_TSTRING: {
+                printf("'%s'", lua_tostring(L, i));
+                break;
+            }
+            case LUA_TBOOLEAN: {
+                printf(lua_toboolean(L, i) ? "true" : "false");
+                break;
+            }
+            case LUA_TNUMBER: {
+                printf("%g", lua_tonumber(L, t));
+                break;
+            }
+            default: {
+                printf("%s", lua_typename(L, t));
+                break;
+            }
+        }
+        printf("  ");
+    }
+    printf("\n");
+}
+/**
+ *
+ *
+ */
+static luarest_status map_response(luarest_response* lr, int res)
+{
+	switch (res) {
+		case 1:
+			*lr = HTTP_RESPONSE_OK;
+			break;
+		case 2:
+			*lr = HTTP_RESPONSE_CREATED;
+			break;
+		case 3:
+			*lr = HTTP_RESPONSE_NO_CONTENT;
+			break;
+		case 4:
+			*lr = HTTP_RESPONSE_NOT_ACCEPTABLE;
+			break;
+		case 5:
+			*lr = HTTP_RESPONSE_NOT_MODIFIED;
+			break;
+		case 6:
+			*lr = HTTP_RESPONSE_SEE_OTHER;
+			break;
+		case 7:
+			*lr = HTTP_RESPONSE_SERVER_ERROR;
+			break;
+		case 8:
+			*lr = HTTP_RESPONSE_TEMPORARY_REDIRECT;
+			break;
+		default:
+			return(LUAREST_ERROR);
+	}
+	return(LUAREST_SUCCESS);
+}
+/**
+ *
+ *
+ */
+static luarest_status map_contype(luarest_content_type *ct, int type)
+{
+	switch (type) {
+		case 1:
+			*ct = CONTENT_TYPE_PLAIN;
+			break;
+		case 2:
+			*ct = CONTENT_TYPE_HTML;
+			break;
+		case 3:
+			*ct = CONTENT_TYPE_JSON;
+			break;
+		default:
+			return(LUAREST_ERROR);
+	}
+	return(LUAREST_SUCCESS);
+}
+/**
+ * LUA syntax: application.register(method, url, callback)
  *
  * Return: boolean true on success
  *
  */
-static int l_service_register(lua_State* state)
+static int l_register(lua_State* state)
 {
-	
+	service* s;
+	application* a = (application*)luaL_checkudata(state, 1, LUA_USERDATA_APPLICATION);
+	int method = luaL_checkint(state, 2);
+	const char* url = luaL_checkstring(state, 3);
+	int ref = luaL_ref(state, LUA_REGISTRYINDEX);
+
+	s = (service*)malloc(sizeof(service));
+	utstring_new(s->key);
+	utstring_printf(s->key, "M%d#P%s", method, url);
+	switch (method)
+	{
+		case 1:
+			s->method = HTTP_METHOD_GET;
+			break;
+		case 2:
+			s->method = HTTP_METHOD_POST;
+			break;
+		case 3:
+			s->method = HTTP_METHOD_PUT;
+			break;
+		case 4:
+			s->method = HTTP_METHOD_DELETE;
+			break;
+		case 5:
+			s->method = HTTP_METHOD_OPTION;
+			break;
+		case 6:
+			s->method = HTTP_METHOD_HEAD;
+			break;
+	}
+	utstring_new(s->path);
+	utstring_printf(s->path, url);
+	s->callback_ref = ref;
+	HASH_ADD_KEYPTR(hh, a->s, utstring_body(s->key), utstring_len(s->key), s);
+
 	return(1);
 }
 /**
@@ -61,14 +185,7 @@ static int luaopen_luarestlibs(lua_State *state)
 		LUA_ENUM(state, HTTP_METHOD_OPTION, i++);
 		LUA_ENUM(state, HTTP_METHOD_HEAD, i++);
 
-		LUA_ENUM(state, HTTP_METHOD_GET, i++);
-		LUA_ENUM(state, HTTP_METHOD_POST, i++);
-		LUA_ENUM(state, HTTP_METHOD_PUT, i++);
-		LUA_ENUM(state, HTTP_METHOD_DELETE, i++);
-		LUA_ENUM(state, HTTP_METHOD_OPTION, i++);
-		LUA_ENUM(state, HTTP_METHOD_HEAD, i++);
-
-		/* register  */
+		/* register HTTP_RESPONSE */
 		i = 1;
 		LUA_ENUM(state, HTTP_RESPONSE_OK, i++);
 		LUA_ENUM(state, HTTP_RESPONSE_CREATED, i++);
@@ -78,12 +195,17 @@ static int luaopen_luarestlibs(lua_State *state)
 		LUA_ENUM(state, HTTP_RESPONSE_SEE_OTHER, i++);
 		LUA_ENUM(state, HTTP_RESPONSE_SERVER_ERROR, i++);
 		LUA_ENUM(state, HTTP_RESPONSE_TEMPORARY_REDIRECT, i++);
+
+		i = 1;
+		LUA_ENUM(state, CONTENT_TYPE_PLAIN, i++);
+		LUA_ENUM(state, CONTENT_TYPE_HTML, i++);
+		LUA_ENUM(state, CONTENT_TYPE_JSON, i++);
 	}
 	
-	luaL_newmetatable(state, LUA_USERDATA_SERVICES);
+	luaL_newmetatable(state, LUA_USERDATA_APPLICATION);
 	lua_pushvalue(state, -1);
 	lua_setfield(state, -2, "__index");
-	luaL_register(state, NULL, l_service);
+	luaL_register(state, NULL, l_application);
 
 	return(1);
 }
@@ -91,10 +213,32 @@ static int luaopen_luarestlibs(lua_State *state)
  *
  *
  */
-static luarest_status verify_application(application* apps, UT_string* path)
+static luarest_status invoke_lua(lua_State* state, int ref_cb, luarest_response* res_code, 
+	luarest_content_type* con_type, UT_string* res_buf)
+{
+	lua_rawgeti(state, LUA_REGISTRYINDEX, ref_cb);
+	lua_pushnil(state);
+	lua_pushnil(state);
+	lua_pushnil(state);
+	if (lua_pcall(state, 3, 3, 0) != 0) {
+		printf("Error calling service-callback: %s\n!", lua_tostring(state, -1));
+		return(LUAREST_ERROR);
+	}
+	map_response(res_code, luaL_checkint(state, -3));
+	map_contype(con_type, luaL_checkint(state, -2));
+	utstring_printf(res_buf, luaL_checkstring(state, -1));
+	lua_pop(state, 3);
+	return(LUAREST_SUCCESS);
+}
+/**
+ *
+ *
+ */
+static luarest_status verify_application(application** apps, const char* appName, UT_string* path)
 {
 	int ret;
 	lua_State* ls = luaL_newstate();
+	application* app;
 	
 	luaL_openlibs(ls);
 	luaopen_luarestlibs(ls);
@@ -106,7 +250,7 @@ static luarest_status verify_application(application* apps, UT_string* path)
 		return(LUAREST_ERROR);
     }
 	ret = lua_pcall(ls, 0, 0, 0);
-    if (ls != 0) {
+    if (ret != 0) {
         printf("Couldn't execute LUA Script %s\n", lua_tostring(ls, -1));
 		lua_close(ls);
 		return(LUAREST_ERROR);
@@ -117,26 +261,26 @@ static luarest_status verify_application(application* apps, UT_string* path)
 		lua_close(ls);
 		return(LUAREST_ERROR);
 	}
-	
-	/*lua_bid = (market_data_candle*)lua_newuserdata(s->state, sizeof(market_data_candle));
-	luaL_getmetatable(s->state, LUA_USERDATA_MARKETDATA_CANDLE);
-	lua_setmetatable(s->state, -2);
-	lua_ask = (market_data_candle*)lua_newuserdata(s->state, sizeof(market_data_candle));
-	luaL_getmetatable(s->state, LUA_USERDATA_MARKETDATA_CANDLE);
-	lua_setmetatable(s->state, -2);
-	s->context->market_data->copy_market_data_candle(bid_candle, lua_bid);
-	s->context->market_data->copy_market_data_candle(ask_candle, lua_ask);
-	if (lua_pcall(s->state, 3, 0, 0) != 0) {
-		printf("Error calling market_data: %s\n!", lua_tostring(s->state, -1));
-	}*/
-
+	app = (application*)lua_newuserdata(ls, sizeof(application));
+	luaL_getmetatable(ls, LUA_USERDATA_APPLICATION);
+	lua_setmetatable(ls, -2);
+	app->s = NULL;
+	utstring_new(app->name);
+	utstring_printf(app->name, appName);
+	if (lua_pcall(ls, 1, 0, 0) != 0) {
+		printf("Error calling luarest_init: %s\n!", lua_tostring(ls, -1));
+		lua_close(ls);
+		return(LUAREST_ERROR);
+	}
+	app->lua_state = ls;
+	HASH_ADD_KEYPTR(hh, *apps, utstring_body(app->name), utstring_len(app->name), app);
 	return(LUAREST_SUCCESS);
 }
 /**
  *
  *
  */
-static luarest_status parse_apps(application* apps, char* directory_path)
+static luarest_status parse_apps(application** apps, char* directory_path)
 {
 #ifdef WIN32
 	WIN32_FIND_DATA ffd;
@@ -176,7 +320,7 @@ static luarest_status parse_apps(application* apps, char* directory_path)
 				utstring_new(app);
 				utstring_printf(app, appFile);
 				/* verify application */
-				ret = verify_application(apps, app);
+				ret = verify_application(apps, ffd.cFileName, app);
 				utstring_free(app);
 				if (ret != LUAREST_SUCCESS) {
 					printf("Application %s couldn't be load due to errors!\n", ffd.cFileName);
@@ -202,7 +346,7 @@ static luarest_status parse_apps(application* apps, char* directory_path)
             if (is_dir) {
                 continue;
             }
-            ch_array_push_back(files, &epdf->d_name);
+            /* re-do for unix */
         }
     }
     closedir(dpdf);
@@ -213,13 +357,45 @@ static luarest_status parse_apps(application* apps, char* directory_path)
  *
  *
  */
-luarest_status create_applications(application* apps, char* app_dir)
+luarest_status invoke_application(application* apps, UT_string* url, luarest_method m, luarest_response* res_code, 
+	luarest_content_type* con_type, UT_string* res_buf)
+{
+	application* app = NULL;
+	service *service;
+	char* pch = NULL;
+	char* tmp = utstring_body(url);
+	UT_string* app_name;
+	UT_string* key;
+
+	utstring_new(app_name);
+	pch = strchr(++tmp, '/');
+	if (pch == NULL) {
+		return(LUAREST_ERROR);
+	}
+	utstring_bincpy(app_name, tmp, pch-tmp);
+	HASH_FIND(hh, apps, utstring_body(app_name), utstring_len(app_name), app);
+	utstring_free(app_name);
+	if (app == NULL) {
+		return(LUAREST_ERROR);
+	}
+	utstring_new(key);
+	utstring_printf(key, "M%d#P%s", m, pch);
+	HASH_FIND(hh, app->s, utstring_body(key), utstring_len(key), service);
+	if (service == NULL) {
+		return(LUAREST_ERROR);
+	}
+	invoke_lua(app->lua_state, service->callback_ref, res_code, con_type, res_buf);
+	return(LUAREST_SUCCESS);
+}
+/**
+ *
+ *
+ */
+luarest_status create_applications(application** apps, char* app_dir)
 {
 	luarest_status ret = LUAREST_SUCCESS;
 
 	ret = parse_apps(apps, app_dir);
-
-	//(*apps)->lua_state = luaL_newstate();
 
 	return(LUAREST_SUCCESS);
 }

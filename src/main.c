@@ -17,30 +17,31 @@
 #define LOGF(fmt, params) printf(fmt "\n", params);
 #define LOG_ERROR(msg) puts(msg);
 
-#define RESPONSE \
-  "HTTP/1.1 200 OK\r\n" \
-  "Content-Type: text/plain\r\n" \
-  "Content-Length: 12\r\n" \
-  "\r\n" \
-  "hello world\n"
+#define RESPONSE_HEADER "HTTP/1.1 200 OK\r\n"
+#define RESPONSE_CONTENT_TYPE "Content-Type: %s\r\n"
+#define RESPONSE_CONTENT_LENGTH "Content-Length: %d\r\n"
+#define RESPONSE_HEADER_COMPLETE "\r\n"
 
 static uv_loop_t* uv_loop;
 static uv_tcp_t server;
 static http_parser_settings parser_settings;
-
-static uv_buf_t resbuf;
+static application* apps = NULL;
 
 typedef struct {
   uv_tcp_t handle;
   http_parser parser;
   uv_write_t write_req;
   int request_num;
+  UT_string* url;
 } client_t;
 
 void on_close(uv_handle_t* handle) {
   client_t* client = (client_t*) handle->data;
 
   LOGF("[ %5d ] connection closed", client->request_num);
+
+  /* TODO: here some stuff is not freed!? http_parser */
+  utstring_free(client->url);
 
   free(client);
 }
@@ -86,6 +87,7 @@ void on_connect(uv_stream_t* server_handle, int status) {
 
   client = (client_t*)malloc(sizeof(client_t));
   client->request_num = request_num;
+  utstring_new(client->url);
 
   LOGF("[ %5d ] new connection", request_num++);
 
@@ -100,26 +102,98 @@ void on_connect(uv_stream_t* server_handle, int status) {
 
   uv_read_start((uv_stream_t*)&client->handle, on_alloc, on_read);
 }
-
+/**
+ *
+ *
+ */
 void after_write(uv_write_t* req, int status) {
-  CHECK(status, "write");
+	UT_string* sbuf = (UT_string*)req->data;
 
-  uv_close((uv_handle_t*)req->handle, on_close);
+	utstring_free(sbuf);
+	
+	CHECK(status, "write");
+	uv_close((uv_handle_t*)req->handle, on_close);
 }
+/**
+ *
+ *
+ */
+luarest_status map_http_method(luarest_method* rm, char m)
+{
+	switch (m) {
+		case 1:
+			*rm = HTTP_METHOD_GET;
+			break;
+		case 3:
+			*rm = HTTP_METHOD_POST;
+			break;
+		case 4:
+			*rm = HTTP_METHOD_PUT;
+			break;
+		case 0:
+			*rm = HTTP_METHOD_DELETE;
+			break;
+		case 6:
+			*rm = HTTP_METHOD_OPTION;
+			break;
+		case 2:
+			*rm = HTTP_METHOD_HEAD;
+			break;
+		default:
+			return(LUAREST_ERROR);
+	}
+	return(LUAREST_SUCCESS);
+}
+/**
+ *
+ *
+ */
+int on_message_complete(http_parser* parser) {
+	client_t* client = (client_t*)parser->data;
+	uv_buf_t buf;
+	UT_string* sbuf;
+	UT_string* resp;
+	luarest_response res_code;
+	luarest_content_type content_type;
+	luarest_method m;
+	luarest_status res = LUAREST_SUCCESS;
 
-int on_headers_complete(http_parser* parser) {
-  client_t* client = (client_t*) parser->data;
-  
-  LOGF("[ %5d ] http message parsed", client->request_num);
+	utstring_new(resp);
+	
+	res = map_http_method(&m, parser->method);
+	res = invoke_application(apps, client->url, m, &res_code, &content_type, resp);
 
-  uv_write(
-      &client->write_req,
-      (uv_stream_t*)&client->handle,
-      &resbuf,
-      1,
-      after_write);
+	utstring_new(sbuf);
+	utstring_printf(sbuf, RESPONSE_HEADER);
+	utstring_printf(sbuf, RESPONSE_CONTENT_TYPE, luarest_content_type_str[content_type]);
+	utstring_printf(sbuf, RESPONSE_CONTENT_LENGTH, utstring_len(resp));
+	utstring_printf(sbuf, RESPONSE_HEADER_COMPLETE);
+	utstring_concat(sbuf, resp);
 
-  return 1;
+	utstring_free(resp);
+	
+	buf.base = utstring_body(sbuf);
+	buf.len = utstring_len(sbuf);
+
+	client->write_req.data = sbuf;
+
+	LOGF("[ %5d ] http message parsed", client->request_num);
+	
+	uv_write(&client->write_req, (uv_stream_t*)&client->handle, &buf, 1, after_write);
+
+	return(1);
+}
+/**
+ *
+ *
+ */
+static int on_url(http_parser* parser, const char *at, size_t length)
+{
+	client_t* client = (client_t*)parser->data;
+	
+	utstring_bincpy(client->url, at, length);
+	
+	return(0);
 }
 /**
  *
@@ -137,25 +211,22 @@ int main(int argc, char *argv[]) {
 	int ret;
 	luarest_status lret;
 	struct sockaddr_in address;
-	application* apps = NULL;
 	
 	if (argc < 2) {
 		usage();
 		return(1);
 	}
 
-	lret = create_applications(apps, argv[1]);
+	lret = create_applications(&apps, argv[1]);
 
 	if (lret != LUAREST_SUCCESS || apps == NULL) {
 		printf("Error: No applications could be loaded can't start!\n");
 		return(1);
 	}
 
-	parser_settings.on_headers_complete = on_headers_complete;
+	parser_settings.on_message_complete = on_message_complete;
+	parser_settings.on_url = on_url;
 	uv_loop = uv_default_loop();
-	
-	resbuf.base = RESPONSE;
-	resbuf.len = sizeof(RESPONSE);
 	
 	ret = uv_tcp_init(uv_loop, &server);
 	CHECK(ret, "init");
