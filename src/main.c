@@ -197,6 +197,7 @@ static void on_connect(uv_stream_t* server_handle, int status) {
 	
 	client = (client_t*)malloc(sizeof(client_t));
 	client->parser = NULL;
+	client->url = NULL;
 	client->conn_num = ++conn_counter;
 	client->keep_alive_header = 0;
 	client->message_complete = 0;
@@ -253,6 +254,7 @@ static int on_headers_complete(http_parser* parser) {
 	luarest_method m;
 	luarest_status res = LUAREST_SUCCESS;
 	client_t* client = (client_t*)parser->data;
+	struct http_parser_url* hpu = (struct http_parser_url*)malloc(sizeof(struct http_parser_url));
 
 	res = map_http_method(&m, parser->method);
 	client->req_method = m;
@@ -260,6 +262,23 @@ static int on_headers_complete(http_parser* parser) {
 	if (parser->flags & F_CONNECTION_KEEP_ALIVE) {
 		client->keep_alive_header = 1;
 	}
+
+	http_parser_parse_url(utstring_body(client->url), utstring_len(client->url), 0, hpu);
+	if (hpu->field_set & (1 << (UF_PATH))) {
+		UT_string* p = NULL;
+		utstring_new(p);
+		utstring_bincpy(p, utstring_body(client->url)+hpu->field_data[UF_PATH].off, hpu->field_data[UF_PATH].len);
+
+		utstring_free(p);
+	}
+	if (hpu->field_set & (1 << (UF_QUERY))) {
+		UT_string* q = NULL;
+		utstring_new(q);
+		utstring_bincpy(q, utstring_body(client->url)+hpu->field_data[UF_QUERY].off, hpu->field_data[UF_QUERY].len);
+
+		utstring_free(q);
+	}
+	free(hpu);
 
 	return(0);
 }
@@ -270,10 +289,6 @@ static int on_headers_complete(http_parser* parser) {
 static int on_url(http_parser* parser, const char *at, size_t length)
 {
 	client_t* client = (client_t*)parser->data;
-	struct http_parser_url* hpu = (struct http_parser_url*)malloc(sizeof(struct http_parser_url));
-
-	http_parser_parse_url(at, length, 0, hpu);
-	free(hpu);
 	
 	utstring_bincpy(client->url, at, length);
 	
