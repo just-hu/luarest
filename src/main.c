@@ -33,17 +33,28 @@ static uv_tcp_t server;
 static http_parser_settings parser_settings;
 static application* apps = NULL;
 
+typedef struct header_t {
+	UT_string* field;
+	UT_string* value;
+} header_t;
+
 typedef struct client_t {
   uv_tcp_t handle;
   http_parser* parser;
   uv_write_t write_req;
   int conn_num;
   UT_string* url;
+  UT_string* path;
+  UT_string* query;
   luarest_method req_method;
   int keep_alive_header;
   int should_keep_alive;
   int message_complete;
+  int num_header_fields;
+  int num_header_values;
   int idle_time_sec;
+  header_t* headers;
+  int headers_len;
   struct client_t* prev;
   struct client_t* next;
 } client_t;
@@ -108,6 +119,7 @@ static void process_request(client_t* client)
 { 
 	luarest_status res = LUAREST_SUCCESS;
 	uv_buf_t buf;
+	int i;
 
 	UT_string* sbuf;
 	UT_string* resp;
@@ -116,7 +128,7 @@ static void process_request(client_t* client)
 
 	utstring_new(resp);
 	
-	res = invoke_application(apps, client->url, client->req_method, &res_code, &content_type, resp);
+	res = invoke_application(apps, client->path, client->req_method, &res_code, &content_type, resp);
 
 	utstring_new(sbuf);
 	utstring_printf(sbuf, RESPONSE_HEADER);
@@ -139,7 +151,18 @@ static void process_request(client_t* client)
 	client->idle_time_sec = 0;
 
 	utstring_free(sbuf);
+	
+	/* reset for next request */
 	utstring_free(client->url);
+	utstring_free(client->path);
+	utstring_free(client->query);
+	client->num_header_fields = 0;
+	client->num_header_values = 0;
+	for (i = 0; i < client->num_header_fields; i++) {
+		utstring_free(client->headers[i].field);
+		utstring_free(client->headers[i].value);
+	}
+	free(client->headers);
 
 	if (!client->should_keep_alive) {
 		uv_close((uv_handle_t*) &client->handle, on_close);
@@ -198,11 +221,14 @@ static void on_connect(uv_stream_t* server_handle, int status) {
 	client = (client_t*)malloc(sizeof(client_t));
 	client->parser = NULL;
 	client->url = NULL;
+	client->num_header_fields = 0;
+	client->num_header_values = 0;
 	client->conn_num = ++conn_counter;
 	client->keep_alive_header = 0;
 	client->message_complete = 0;
 	client->should_keep_alive = 1;
 	client->idle_time_sec = 0;
+	client->headers = NULL;
 
 	LOGF("[ %5d ] new connection", client->conn_num);
 	
@@ -265,18 +291,10 @@ static int on_headers_complete(http_parser* parser) {
 
 	http_parser_parse_url(utstring_body(client->url), utstring_len(client->url), 0, hpu);
 	if (hpu->field_set & (1 << (UF_PATH))) {
-		UT_string* p = NULL;
-		utstring_new(p);
-		utstring_bincpy(p, utstring_body(client->url)+hpu->field_data[UF_PATH].off, hpu->field_data[UF_PATH].len);
-
-		utstring_free(p);
+		utstring_bincpy(client->path, utstring_body(client->url)+hpu->field_data[UF_PATH].off, hpu->field_data[UF_PATH].len);
 	}
 	if (hpu->field_set & (1 << (UF_QUERY))) {
-		UT_string* q = NULL;
-		utstring_new(q);
-		utstring_bincpy(q, utstring_body(client->url)+hpu->field_data[UF_QUERY].off, hpu->field_data[UF_QUERY].len);
-
-		utstring_free(q);
+		utstring_bincpy(client->query, utstring_body(client->url)+hpu->field_data[UF_QUERY].off, hpu->field_data[UF_QUERY].len);
 	}
 	free(hpu);
 
@@ -298,11 +316,55 @@ static int on_url(http_parser* parser, const char *at, size_t length)
  *
  *
  */
+static int on_header_field(http_parser* parser, const char* at, size_t lenght)
+{
+	client_t* client = (client_t*)parser->data;
+
+	if (client->num_header_fields == client->num_header_values) {
+		if (client->num_header_fields == 0) {
+			client->headers = (header_t*)malloc(sizeof(header_t)*2);
+			client->headers_len = 2;
+		}
+		else if (client->num_header_fields == client->headers_len) {
+			client->headers_len *= 2;
+			client->headers = (header_t*)realloc(client->headers, sizeof(header_t)*client->headers_len);
+		}
+		client->num_header_fields++;
+		utstring_new(client->headers[client->num_header_fields-1].field);
+	}
+
+	utstring_bincpy(client->headers[client->num_header_fields-1].field, at, lenght);
+
+	return(0);
+}
+/**
+ *
+ *
+ */
+static int on_header_value(http_parser* parser, const char* at, size_t lenght)
+{
+	client_t* client = (client_t*)parser->data;
+
+	if (client->num_header_fields != client->num_header_values) {
+		client->num_header_values++;
+		utstring_new(client->headers[client->num_header_values-1].value);
+	}
+
+	utstring_bincpy(client->headers[client->num_header_values-1].value, at, lenght);
+
+	return(0);
+}
+/**
+ *
+ *
+ */
 static int on_message_begin(http_parser* parser)
 {
 	client_t* client = (client_t*)parser->data;
 
 	utstring_new(client->url);
+	utstring_new(client->path);
+	utstring_new(client->query);
 	client->message_complete = 0;
 
 	return(0);
@@ -352,6 +414,8 @@ int main(int argc, char *argv[]) {
 	}
 
 	parser_settings.on_url = on_url;
+	parser_settings.on_header_field = on_header_field;
+	parser_settings.on_header_value = on_header_value;
 	parser_settings.on_headers_complete = on_headers_complete;
 	parser_settings.on_message_begin = on_message_begin;
 	parser_settings.on_message_complete = on_message_complete;

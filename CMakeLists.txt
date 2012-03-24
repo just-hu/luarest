@@ -25,7 +25,7 @@ add_library(http-parser ${HTTP_PARSER_SRC})
 
 # Main
 set (LIB_LIST ${UV_LIBRARIES} ${LUAJIT_LIBRARIES} http-parser)
-set (LUAREST_SRC ${SRC_DIR}/main.c ${SRC_DIR}/app.c)
+set (LUAREST_SRC ${SRC_DIR}/main.c ${SRC_DIR}/app.c ${SRC_DIR}/escape.c)
 
 add_executable(luarest ${LUAREST_SRC})
 

@@ -1,0 +1,99 @@
+#include "escape.h"
+
+#ifndef TOASCII
+#define TOASCII(c) (c)
+#define FROMASCII(c) (c)                                   
+#endif
+
+#define HEX_ESCAPE '%'
+#define ACCEPTABLE(a)	( a>=32 && a<128 && ((isAcceptable[a-32]) & mask))
+
+static unsigned char isAcceptable[96] =
+{/* 0x0 0x1 0x2 0x3 0x4 0x5 0x6 0x7 0x8 0x9 0xA 0xB 0xC 0xD 0xE 0xF */
+    0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0xF,0xE,0x0,0xF,0xF,0xC, /* 2x  !"#$%&'()*+,-./   */
+    0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0x8,0x0,0x0,0x0,0x0,0x0, /* 3x 0123456789:;<=>?   */
+    0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF, /* 4x @ABCDEFGHIJKLMNO   */
+    0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0x0,0x0,0x0,0x0,0xF, /* 5X PQRSTUVWXYZ[\]^_   */
+    0x0,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF, /* 6x `abcdefghijklmno   */
+    0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0xF,0x0,0x0,0x0,0x0,0x0  /* 7X pqrstuvwxyz{\}~DEL */
+};
+static char *hex = "0123456789ABCDEF";
+
+/**
+ * Code from libwww
+ *
+ */
+static char asciiHexToChar (char c)
+{
+    return  c >= '0' && c <= '9' ?  c - '0' 
+    	    : c >= 'A' && c <= 'F'? c - 'A' + 10
+    	    : c - 'a' + 10;	/* accept small letters just in case */
+}
+/**
+ * Code from libwww
+ *
+ */
+luarest_status url_escape(const char* src, char* target)
+{
+	const char * p;
+    char * q;
+    int unacceptable = 0;
+	int mask = 0x4; /* URL */
+
+    if (!src) {
+		return(LUAREST_ERROR);
+	}
+    for (p=src; *p; p++) {
+		if (!ACCEPTABLE((unsigned char)TOASCII(*p))) {
+			unacceptable++;
+		}
+	}
+    
+    for(q=target, p=src; *p; p++) {
+    	unsigned char a = TOASCII(*p);
+		if (!ACCEPTABLE(a)) {
+			*q++ = HEX_ESCAPE;	/* Means hex commming */
+			*q++ = hex[a >> 4];
+			*q++ = hex[a & 15];
+		}
+		else { 
+			*q++ = *p;
+		}
+	}
+	*q++ = 0;			/* Terminate */
+    
+	return(LUAREST_SUCCESS);
+}
+/**
+ * Code from libwww
+ *
+ */
+luarest_status url_unescape(const char* src, char* target)
+{
+	const char* p = src;
+    char* q = target;
+
+    if (!src) {
+		return(LUAREST_ERROR);
+    }
+
+    while(*p) {
+        if (*p == HEX_ESCAPE) {
+			p++;
+			if (*p) {
+				*q = asciiHexToChar(*p++) * 16;
+			}
+
+			if (*p) *q = FROMASCII(*q + asciiHexToChar(*p)), ++p; {
+				q++;
+			}
+		} 
+		else {
+			*q++ = *p++; 
+		}
+    }
+    
+	*q++ = 0;
+    
+	return(LUAREST_SUCCESS);
+}
