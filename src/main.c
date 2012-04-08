@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <uv.h>
+#include <uv-private/ngx-queue.h>
 #include <http_parser.h>
 
 #include "thirdparty/utlist.h"
@@ -37,6 +38,11 @@ typedef struct header_t {
 	UT_string* field;
 	UT_string* value;
 } header_t;
+
+typedef struct response_t {
+	ngx_queue_t queue;
+
+} response_t;
 
 typedef struct client_t {
   uv_tcp_t handle;
